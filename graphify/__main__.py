@@ -97,6 +97,11 @@ _PLATFORM_CONFIG: dict[str, dict] = {
         "skill_dst": Path(".claude") / "skills" / "graphify" / "SKILL.md",
         "claude_md": True,
     },
+    "antigravity": {
+        "skill_file": "skill.md",
+        "skill_dst": Path(".gemini") / "antigravity" / "skills" / "graphify" / "SKILL.md",
+        "claude_md": False,
+    },
 }
 
 
@@ -203,6 +208,10 @@ _GEMINI_HOOK = {
     ],
 }
 
+_ANTIGRAVITY_AGENTS_MD_MARKER = "## graphify (antigravity)"
+
+_ANTIGRAVITY_AGENTS_MD_SECTION = (Path(__file__).parent / "agents-antigravity.md").read_text(encoding="utf-8")
+
 
 def gemini_install(project_dir: Path | None = None) -> None:
     """Copy skill file to ~/.gemini/skills/graphify/, write GEMINI.md section, and install BeforeTool hook."""
@@ -296,6 +305,123 @@ def gemini_uninstall(project_dir: Path | None = None) -> None:
         target.unlink()
         print(f"GEMINI.md was empty after removal - deleted {target.resolve()}")
     _uninstall_gemini_hook(project_dir or Path("."))
+
+
+def antigravity_install(project_dir: Path | None = None) -> None:
+    """Install graphify for Google Antigravity: build skill, MCP server, and AGENTS.md querying instructions."""
+    # Copy skill to global antigravity skills directory
+    install(platform="antigravity")
+
+    # Write querying instructions to local AGENTS.md
+    target = (project_dir or Path(".")) / "AGENTS.md"
+    if target.exists():
+        content = target.read_text(encoding="utf-8")
+        if _ANTIGRAVITY_AGENTS_MD_MARKER in content:
+            print("  AGENTS.md        ->  graphify (antigravity) already configured (no change)")
+        else:
+            target.write_text(content.rstrip() + "\n\n" + _ANTIGRAVITY_AGENTS_MD_SECTION, encoding="utf-8")
+            print(f"  AGENTS.md        ->  querying instructions written to {target.resolve()}")
+    else:
+        target.write_text(_ANTIGRAVITY_AGENTS_MD_SECTION, encoding="utf-8")
+        print(f"  AGENTS.md        ->  created at {target.resolve()}")
+
+    # Register MCP server in ~/.gemini/antigravity/mcp_config.json
+    mcp_path = Path.home() / ".gemini" / "antigravity" / "mcp_config.json"
+    config = {}
+    if mcp_path.exists():
+        try:
+            config = json.loads(mcp_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            config = {}
+    config.setdefault("mcpServers", {})
+
+    graph_path = (project_dir or Path(".")) / "graphify-out" / "graph.json"
+    config["mcpServers"]["graphify"] = {
+        "command": "graphify-rs",
+        "args": ["serve", "--graph", str(graph_path.resolve())],
+        "env": {
+            "MCP_MODE": "stdio",
+            "LOG_LEVEL": "error",
+            "DISABLE_CONSOLE_OUTPUT": "true",
+        },
+    }
+
+    mcp_path.parent.mkdir(parents=True, exist_ok=True)
+    mcp_path.write_text(json.dumps(config, indent=2), encoding="utf-8")
+    print(f"  mcp_config.json  ->  graphify server registered at {mcp_path.resolve()}")
+    print()
+    print("Refresh MCP servers in the Antigravity Agent panel to activate.")
+
+
+def antigravity_uninstall(project_dir: Path | None = None) -> None:
+    """Remove graphify skill, MCP server entry, and AGENTS.md querying instructions for Google Antigravity."""
+
+    # Skill removal
+    cfg = _PLATFORM_CONFIG["antigravity"]
+    skill_dst = Path.home() / cfg["skill_dst"]
+    if skill_dst.exists():
+        try:
+            skill_dst.unlink()
+            print(f"  skill removed    ->  {skill_dst}")
+        except OSError as e:
+            print(f"  warning: could not remove skill file: {e}", file=sys.stderr)
+    else:
+        print("  skill            ->  not found (already removed?)")
+
+    version_file = skill_dst.parent / ".graphify_version"
+    if version_file.exists():
+        try:
+            version_file.unlink()
+        except OSError:
+            pass
+
+    for d in (skill_dst.parent, skill_dst.parent.parent):
+        try:
+            d.rmdir()
+        except OSError:
+            break
+
+    # AGENTS.md querying instructions removal
+    target = (project_dir or Path(".")) / "AGENTS.md"
+    if not target.exists():
+        print("  AGENTS.md        ->  not found (already removed?)")
+    else:
+        content = target.read_text(encoding="utf-8")
+        if _ANTIGRAVITY_AGENTS_MD_MARKER not in content:
+            print("  AGENTS.md        ->  graphify (antigravity) section not found (already removed?)")
+        else:
+            cleaned = re.sub(
+                r"\n*## graphify \(antigravity\)\n.*?(?=\n## |\Z)",
+                "",
+                content,
+                flags=re.DOTALL,
+            ).rstrip()
+            if cleaned:
+                target.write_text(cleaned + "\n", encoding="utf-8")
+                print(f"  AGENTS.md        ->  graphify (antigravity) section removed")
+            else:
+                target.unlink()
+                print(f"  AGENTS.md        ->  was empty after removal, deleted")
+
+    # MCP server removal
+    mcp_path = Path.home() / ".gemini" / "antigravity" / "mcp_config.json"
+    if not mcp_path.exists():
+        print("  mcp_config.json  ->  not found (already removed?)")
+    else:
+        try:
+            config = json.loads(mcp_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as e:
+            print(f"  warning: mcp_config.json is not valid JSON, skipping MCP removal: {e}", file=sys.stderr)
+        else:
+            if "graphify" in config.get("mcpServers", {}):
+                del config["mcpServers"]["graphify"]
+                try:
+                    mcp_path.write_text(json.dumps(config, indent=2), encoding="utf-8")
+                    print(f"  mcp_config.json  ->  graphify server removed")
+                except OSError as e:
+                    print(f"  error: could not write mcp_config.json: {e}", file=sys.stderr)
+            else:
+                print("  mcp_config.json  ->  graphify entry not found (already removed?)")
 
 
 _CURSOR_RULE_PATH = Path(".cursor") / "rules" / "graphify.mdc"
@@ -476,7 +602,7 @@ def _uninstall_codex_hook(project_dir: Path) -> None:
 
 
 def _agents_install(project_dir: Path, platform: str) -> None:
-    """Write the graphify section to the local AGENTS.md (Codex/OpenCode/OpenClaw)."""
+    """Write the graphify section to the local AGENTS.md (Codex/OpenCode/OpenClaw/Antigravity)."""
     target = (project_dir or Path(".")) / "AGENTS.md"
 
     if target.exists():
@@ -637,7 +763,7 @@ def main() -> None:
         print("Usage: graphify <command>")
         print()
         print("Commands:")
-        print("  install [--platform P]  copy skill to platform config dir (claude|windows|codex|opencode|aider|claw|droid|trae|trae-cn|gemini|cursor)")
+        print("  install [--platform P]  copy skill to platform config dir (claude|windows|codex|opencode|aider|claw|droid|trae|trae-cn|gemini|cursor|antigravity)")
         print("  query \"<question>\"       BFS traversal of graph.json for a question")
         print("    --dfs                   use depth-first instead of breadth-first")
         print("    --budget N              cap output at N tokens (default 2000)")
@@ -654,6 +780,8 @@ def main() -> None:
         print("  hook status             check if git hooks are installed")
         print("  gemini install          write GEMINI.md section + BeforeTool hook (Gemini CLI)")
         print("  gemini uninstall        remove GEMINI.md section + BeforeTool hook")
+        print("  antigravity install     copy graphify skill + MCP server + AGENTS.md rule (Google Antigravity)")
+        print("  antigravity uninstall   remove graphify skill, MCP entry, and AGENTS.md rule")
         print("  cursor install          write .cursor/rules/graphify.mdc (Cursor)")
         print("  cursor uninstall        remove .cursor/rules/graphify.mdc")
         print("  claude install          write graphify section to CLAUDE.md + PreToolUse hook (Claude Code)")
@@ -711,6 +839,15 @@ def main() -> None:
             gemini_uninstall()
         else:
             print("Usage: graphify gemini [install|uninstall]", file=sys.stderr)
+            sys.exit(1)
+    elif cmd == "antigravity":
+        subcmd = sys.argv[2] if len(sys.argv) > 2 else ""
+        if subcmd == "install":
+            antigravity_install()
+        elif subcmd == "uninstall":
+            antigravity_uninstall()
+        else:
+            print("Usage: graphify antigravity [install|uninstall]", file=sys.stderr)
             sys.exit(1)
     elif cmd == "cursor":
         subcmd = sys.argv[2] if len(sys.argv) > 2 else ""
